@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+data/prices/*.parquet
+cache/*.csv
+reports/*.md
+out.log
+snippet.log
