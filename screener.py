@@ -17,7 +17,8 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _momentum_12_1(df: pd.DataFrame) -> float:
+def _momentum(df: pd.DataFrame) -> float:
+    """MOM_LOOKBACK/MOM_SKIP trading days back, minus the most recent MOM_SKIP days."""
     closes = df["Close"].dropna()
     if len(closes) <= config.MOM_LOOKBACK:
         return float("nan")
@@ -75,7 +76,7 @@ def run_screen() -> dict:
     sector_ranked = sector.rank_sectors()
 
     long_pool = uni[uni["sector_etf"].isin(leading_etfs)]["ticker"].tolist()
-    short_pool = uni[uni["sector_etf"].isin(lagging_etfs)]["ticker"].tolist()
+    short_pool = uni[uni["sector_etf"].isin(lagging_etfs)]["ticker"].tolist() if config.INCLUDE_SHORT else []
 
     long_rows, short_rows = [], []
 
@@ -89,7 +90,7 @@ def run_screen() -> dict:
             state = _trend_state(last)
             if state != direction:
                 continue
-            mom = _momentum_12_1(df)
+            mom = _momentum(df)
             if pd.isna(mom):
                 continue
             triggered = _entry_trigger(df, direction)
@@ -99,7 +100,7 @@ def run_screen() -> dict:
                     "ticker": ticker,
                     "sector_etf": uni.loc[uni["ticker"] == ticker, "sector_etf"].iloc[0],
                     "price": round(last["Close"], 2),
-                    "momentum_12_1": mom,
+                    "momentum": mom,
                     "triggered_today": triggered,
                     "stop": round(stop, 2),
                     "target": round(target, 2),
@@ -110,12 +111,12 @@ def run_screen() -> dict:
     short_df = pd.DataFrame(short_rows)
 
     if not long_df.empty:
-        long_df = long_df.sort_values("momentum_12_1", ascending=False)
+        long_df = long_df.sort_values("momentum", ascending=False)
         cutoff = max(1, int(len(long_df) * config.TOP_DECILE))
         long_df = long_df.head(cutoff)
 
     if not short_df.empty:
-        short_df = short_df.sort_values("momentum_12_1", ascending=True)
+        short_df = short_df.sort_values("momentum", ascending=True)
         cutoff = max(1, int(len(short_df) * config.TOP_DECILE))
         short_df = short_df.head(cutoff)
 

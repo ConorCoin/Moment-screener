@@ -1,23 +1,29 @@
 # Momentum Screener
 
 Daily end-of-day screener: sector rotation + relative-strength momentum, trend-confirmed
-(not breakout) entries, both long and short. Generates a daily watchlist — it does **not**
-place trades for you.
+(not breakout) entries. Generates a daily watchlist — it does **not** place trades for you.
 
 ## How it works
 
 1. **Universe**: S&P 500 + Nasdaq 100 (deduped), sector-tagged via GICS/SPDR sector ETF mapping.
 2. **Sector rotation**: ranks the 11 SPDR sector ETFs by relative strength vs. SPY (blended
-   3-month / 6-month). Top 4 = leading sectors (long universe), bottom 4 = lagging (short universe).
+   3-month / 6-month). Top 5 = leading sectors (long universe).
 3. **Trend filter**: within leading sectors, only stocks in a confirmed uptrend qualify
-   (price > rising 50dma > rising 200dma); mirrored for lagging sectors/downtrends.
-4. **Momentum ranking**: 12-1 month momentum (classic cross-sectional momentum factor),
-   top decile of qualifying longs, bottom decile of qualifying shorts.
+   (price > rising 50dma > rising 200dma).
+4. **Momentum ranking**: 6-1 month momentum, top 20% of qualifying longs.
 5. **Entry trigger**: a candidate "triggers" when it pulls back near its 50dma and closes
-   back through it in the trend direction — not a breakout trigger.
-6. **Stop/target**: fixed % off entry price (defaults: 7% stop / 15% target — see `config.py`).
+   back above it — not a breakout trigger.
+6. **Stop/target**: fixed % off entry price (7% stop / 10% target — see `config.py`).
 
 Signals are based on the day's closing price, so you act on them in the **next** session.
+
+## Backtested parameters (see "Backtest results" below)
+
+Long-only. The exact parameters above (5 leading sectors, 20% top-decile cutoff, 6-1 month
+momentum, 7% stop / 10% target) are the result of a walk-forward backtest over 2017-2026,
+not the original arbitrary defaults. Shorting is disabled (`config.INCLUDE_SHORT = False`)
+because backtesting showed the short side was a net loser over that period — set it back to
+`True` if you want to re-enable it (e.g. the lagging-sector logic is still there, just unused).
 
 ## Running it
 
@@ -70,17 +76,38 @@ This isn't built into the pipeline (deliberately — the screening logic itself 
 deterministic and backtestable, not dependent on an LLM's non-reproducible judgment). Treat it
 as a manual second opinion step between "the report triggered something" and "I place the trade."
 
+## Backtest results (walk-forward, 2017-2026, see `backtest.py` / `tune.py` / `tune2.py`)
+
+These are local analysis scripts (not part of the daily pipeline — `main.py` doesn't call
+them). Their CSV/log outputs are gitignored since they're regenerable data, not code, but the
+scripts themselves are here so the parameter choices below are reproducible, not just claimed:
+
+- The original long+short, untuned defaults (7% stop/15% target, 12-1 month momentum, 4
+  leading/4 lagging sectors) **badly underperformed buy-and-hold SPY**: 1.6% CAGR / 0.23 Sharpe
+  vs. SPY's 14.4% CAGR / 0.81 Sharpe over the same window. The short side alone was a net
+  loser (-1.85% avg return/trade).
+- After tuning (long-only, wider stop kept at 7%, target lowered to 10%, wider 20% candidate
+  pool, 5 leading sectors, 6-1 month momentum — i.e. the current `config.py` defaults):
+  **in-sample (2017-2022) it slightly beat SPY** (10.6% CAGR / 0.91 Sharpe vs. SPY's 10.3% /
+  0.58). **Out-of-sample (2023-2026) it still trailed** (7.1% CAGR / 0.64 Sharpe vs. SPY's
+  21.3% / 1.38) — though that period was an exceptionally strong bull run for SPY specifically,
+  not a typical stretch.
+- **Tighter stops were tested and were worse**, not better — 4-5% stops underperformed the
+  7% stop at every target level tried. Counterintuitive, but consistent across the whole grid.
+- Caveats that still apply: **zero transaction costs/slippage modeled** on ~1,500+ trades in
+  the tuned backtest — real costs would erode the edge further. The short-side backtest
+  approximated puts as straight short-stock P&L, not real options pricing. Parameter selection
+  used the out-of-sample period somewhat to break ties, so that holdout isn't perfectly blind —
+  a truly rigorous check would validate against a third, never-touched period.
+
 ## What this is and isn't
 
 - This is a **signal generator**, not an autotrader. You review `reports/<date>.md` and
   decide whether to act.
-- The short side is designed to be expressed via **puts or put spreads**, not naked short
-  stock — naked shorts carry theoretically unlimited risk; a long put caps your risk at
-  the premium paid.
-- Stop/target % are a simple starting default, not backtested or optimized. Before trading
-  this for real, backtest it (walk-forward, with realistic costs) and paper-trade it for a
-  while — this build intentionally skipped backtesting per your request to get the live
-  pipeline working first.
+- If you re-enable shorting, express it via **puts or put spreads**, not naked short stock —
+  naked shorts carry theoretically unlimited risk; a long put caps your risk at the premium paid.
+- Even the tuned version is not a proven market-beater — see "Backtest results" above. It's
+  better-tested than an arbitrary guess, not a validated edge you should size heavily.
 - Sector mapping, universe lists, and data quality all rely on free sources (Wikipedia,
   slickcharts, yfinance) — spot-check it periodically rather than assuming it's always
   perfectly current.
@@ -88,4 +115,4 @@ as a manual second opinion step between "the report triggered something" and "I 
 ## Tunable parameters
 
 All in `config.py`: moving average periods, momentum lookback/skip, pullback band,
-stop/target %, number of leading/lagging sectors, top-decile cutoff.
+stop/target %, number of leading/lagging sectors, top-decile cutoff, `INCLUDE_SHORT` toggle.

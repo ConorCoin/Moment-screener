@@ -5,3 +5,8 @@ cache/*.csv
 reports/*.md
 out.log
 snippet.log
+backtest_trades.csv
+backtest_daily_returns.csv
+tune_grid_results.csv
+tune2_phaseA.csv
+tune2_phaseB.csv
