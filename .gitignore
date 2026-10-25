@@ -10,3 +10,4 @@ backtest_daily_returns.csv
 tune_grid_results.csv
 tune2_phaseA.csv
 tune2_phaseB.csv
+tune3_factorial.csv

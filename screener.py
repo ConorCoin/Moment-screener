@@ -14,6 +14,7 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ma_slow"] = df["Close"].rolling(config.MA_SLOW).mean()
     df["ma_fast_slope"] = df["ma_fast"] - df["ma_fast"].shift(config.MA_SLOPE_LOOKBACK)
     df["ma_slow_slope"] = df["ma_slow"] - df["ma_slow"].shift(config.MA_SLOPE_LOOKBACK)
+    df["avg_volume"] = df["Volume"].rolling(config.VOLUME_CONFIRM_WINDOW).mean()
     return df
 
 
@@ -46,6 +47,10 @@ def _entry_trigger(df: pd.DataFrame, direction: str) -> bool:
     today, yday = df.iloc[-1], df.iloc[-2]
     if pd.isna(today["ma_fast"]) or pd.isna(yday["ma_fast"]):
         return False
+
+    if config.REQUIRE_VOLUME_CONFIRM:
+        if pd.isna(today["avg_volume"]) or today["Volume"] <= today["avg_volume"]:
+            return False
 
     band = config.PULLBACK_BAND_PCT
     if direction == "up":

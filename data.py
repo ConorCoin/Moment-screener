@@ -40,7 +40,7 @@ def _download_batch(tickers: list[str], period: str = "2y") -> dict[str, pd.Data
     return out
 
 
-def update_prices(tickers: list[str], batch_size: int = 50, period: str = "2y") -> list[str]:
+def update_prices(tickers: list[str], batch_size: int = 50, period: str = config.PRICE_HISTORY_PERIOD) -> list[str]:
     """Updates local parquet cache for each ticker. Returns list of tickers that failed."""
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     failed = []

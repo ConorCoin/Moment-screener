@@ -9,6 +9,10 @@ REPORTS_DIR = ROOT / "reports"
 
 # --- History needed ---
 LOOKBACK_DAYS = 420  # >14 months of trading days, covers 200dma + 12-1mo momentum
+# yfinance period string for the local price cache. Kept long (not just what the live
+# screener needs) so backtest.py/tune*.py always have enough history without a separate
+# download step -- a short period here would silently truncate the cache on every run.
+PRICE_HISTORY_PERIOD = "10y"
 
 # --- Trend filter ---
 MA_FAST = 50
@@ -44,6 +48,8 @@ TOP_DECILE = 0.20    # top/bottom 20% of ranked candidates — tuned wider from 
 
 # --- Entry trigger: pullback to the rising/falling 50dma, then close back through it ---
 PULLBACK_BAND_PCT = 0.02  # price must come within 2% of the 50dma to count as "pulled back"
+REQUIRE_VOLUME_CONFIRM = True  # tuned: trigger day's volume must exceed its own rolling average
+VOLUME_CONFIRM_WINDOW = 20     # trading days for that rolling average
 
 # --- Exit: fixed profit target / stop loss (% off entry price) ---
 STOP_LOSS_PCT = 0.07       # unchanged — tested tighter stops (4%, 5%) and they were worse

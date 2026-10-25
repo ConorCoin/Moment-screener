@@ -11,8 +11,9 @@ Daily end-of-day screener: sector rotation + relative-strength momentum, trend-c
 3. **Trend filter**: within leading sectors, only stocks in a confirmed uptrend qualify
    (price > rising 50dma > rising 200dma).
 4. **Momentum ranking**: 6-1 month momentum, top 20% of qualifying longs.
-5. **Entry trigger**: a candidate "triggers" when it pulls back near its 50dma and closes
-   back above it — not a breakout trigger.
+5. **Entry trigger**: a candidate "triggers" when it pulls back near its 50dma, closes back
+   above it, **and the day's volume exceeds its own 20-day average** (real buying interest,
+   not just a price wiggle) — not a breakout trigger.
 6. **Stop/target**: fixed % off entry price (7% stop / 10% target — see `config.py`).
 
 Signals are based on the day's closing price, so you act on them in the **next** session.
@@ -76,7 +77,7 @@ This isn't built into the pipeline (deliberately — the screening logic itself 
 deterministic and backtestable, not dependent on an LLM's non-reproducible judgment). Treat it
 as a manual second opinion step between "the report triggered something" and "I place the trade."
 
-## Backtest results (walk-forward, 2017-2026, see `backtest.py` / `tune.py` / `tune2.py`)
+## Backtest results (walk-forward, 2017-2026, see `backtest.py` / `tune.py` / `tune2.py` / `tune3.py`)
 
 These are local analysis scripts (not part of the daily pipeline — `main.py` doesn't call
 them). Their CSV/log outputs are gitignored since they're regenerable data, not code, but the
@@ -99,6 +100,25 @@ scripts themselves are here so the parameter choices below are reproducible, not
   approximated puts as straight short-stock P&L, not real options pricing. Parameter selection
   used the out-of-sample period somewhat to break ties, so that holdout isn't perfectly blind —
   a truly rigorous check would validate against a third, never-touched period.
+
+### Round 3: trying to reduce how often trades hit the stop (see `tune3.py`)
+
+Tested five additional levers as a full factorial (32 combinations): ATR-based stop/target
+sizing, 2-day entry confirmation, volume confirmation, a minimum trend-slope threshold, and a
+trailing stop. Results were mostly disappointing or neutral:
+
+- **ATR-based stops hurt clearly** (OOS Sharpe dropped from 0.54 to 0.13) — the 2x/3x ATR
+  multiples used were a guess, not tuned, so this isn't a final verdict on ATR stops in
+  general, just on this untested version of them.
+- **Trailing stop increased the loss rate rather than reducing it** — it ratchets the stop off
+  the running high/low since entry with no minimum profit cushion first, so a stock that
+  wiggles up slightly then pulls back gets stopped near breakeven-or-worse instead of riding
+  out normal noise. A design flaw in this implementation, not a verdict on trailing stops.
+- **2-day confirmation and the slope threshold were both roughly a wash** — inconsistent
+  between in-sample and out-of-sample, not worth the added complexity.
+- **Volume confirmation, tested alone, was the standout** — out-of-sample Sharpe 0.85 vs. the
+  0.65 baseline, with a slightly lower loss rate too. It's now `config.REQUIRE_VOLUME_CONFIRM
+  = True` in the live screener. The other four were left off.
 
 ## What this is and isn't
 

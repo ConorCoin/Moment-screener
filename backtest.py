@@ -30,39 +30,72 @@ import universe
 MAX_CONCURRENT = 20
 
 
-def _indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
-    close = df["Close"]
+def _indicator_frame(df: pd.DataFrame, confirm_days: int = 1, require_volume: bool = False,
+                      min_slope_pct: float = 0.0, atr_window: int = 14, vol_window: int = 20) -> pd.DataFrame:
+    """confirm_days: entry requires the reclaim to hold this many consecutive closes (1 = old behavior).
+    require_volume: entry day's volume must exceed its own vol_window-day rolling average.
+    min_slope_pct: MA slope must exceed this fraction of the MA's own level (0 = old behavior, any
+    positive/negative slope counts)."""
+    close, high, low = df["Close"], df["High"], df["Low"]
     ma_fast = close.rolling(config.MA_FAST).mean()
     ma_slow = close.rolling(config.MA_SLOW).mean()
     ma_fast_slope = ma_fast - ma_fast.shift(config.MA_SLOPE_LOOKBACK)
     ma_slow_slope = ma_slow - ma_slow.shift(config.MA_SLOPE_LOOKBACK)
     momentum = close.shift(config.MOM_SKIP) / close.shift(config.MOM_LOOKBACK) - 1
 
-    up = (close > ma_fast) & (ma_fast > ma_slow) & (ma_fast_slope > 0) & (ma_slow_slope > 0)
-    down = (close < ma_fast) & (ma_fast < ma_slow) & (ma_fast_slope < 0) & (ma_slow_slope < 0)
+    # Average True Range -- always computed (cheap), used only when stop_mode="atr" in simulate().
+    prev_close_for_tr = close.shift(1)
+    true_range = pd.concat(
+        [high - low, (high - prev_close_for_tr).abs(), (low - prev_close_for_tr).abs()], axis=1
+    ).max(axis=1)
+    atr = true_range.rolling(atr_window).mean()
+
+    slope_thresh_fast = (min_slope_pct * ma_fast).abs()
+    slope_thresh_slow = (min_slope_pct * ma_slow).abs()
+    up = (close > ma_fast) & (ma_fast > ma_slow) & (ma_fast_slope > slope_thresh_fast) & (ma_slow_slope > slope_thresh_slow)
+    down = (close < ma_fast) & (ma_fast < ma_slow) & (ma_fast_slope < -slope_thresh_fast) & (ma_slow_slope < -slope_thresh_slow)
 
     band = config.PULLBACK_BAND_PCT
     prev_close, prev_ma_fast = close.shift(1), ma_fast.shift(1)
     approached_up = ((prev_close - prev_ma_fast).abs() / prev_ma_fast <= band) | (prev_close <= prev_ma_fast)
     approached_down = ((prev_close - prev_ma_fast).abs() / prev_ma_fast <= band) | (prev_close >= prev_ma_fast)
-    trigger_up = (up & approached_up & (close > ma_fast)).fillna(False)
-    trigger_down = (down & approached_down & (close < ma_fast)).fillna(False)
+
+    reclaim_up, reclaim_down = close > ma_fast, close < ma_fast
+    if confirm_days > 1:
+        held_up = reclaim_up.rolling(confirm_days).apply(lambda x: x.all(), raw=True).fillna(0).astype(bool)
+        held_down = reclaim_down.rolling(confirm_days).apply(lambda x: x.all(), raw=True).fillna(0).astype(bool)
+        trigger_up = up & held_up & approached_up.shift(confirm_days - 1)
+        trigger_down = down & held_down & approached_down.shift(confirm_days - 1)
+    else:
+        trigger_up = up & approached_up & reclaim_up
+        trigger_down = down & approached_down & reclaim_down
+
+    if require_volume and "Volume" in df.columns:
+        avg_vol = df["Volume"].rolling(vol_window).mean()
+        vol_ok = df["Volume"] > avg_vol
+        trigger_up = trigger_up & vol_ok
+        trigger_down = trigger_down & vol_ok
+
+    trigger_up = trigger_up.fillna(False)
+    trigger_down = trigger_down.fillna(False)
 
     return pd.DataFrame(
         {
-            "Open": df["Open"], "High": df["High"], "Low": df["Low"], "Close": close,
+            "Open": df["Open"], "High": high, "Low": low, "Close": close,
             "trend_up": up.fillna(False), "trend_down": down.fillna(False),
-            "momentum": momentum,
+            "momentum": momentum, "atr": atr,
             "trigger_up": trigger_up, "trigger_down": trigger_down,
         }
     )
 
 
-def _build_wide_frames(uni: pd.DataFrame):
+def _build_wide_frames(uni: pd.DataFrame, confirm_days: int = 1, require_volume: bool = False,
+                        min_slope_pct: float = 0.0):
     bench = data.load_prices(config.BENCHMARK)
     master_dates = bench.index
 
-    fields = ["Open", "High", "Low", "Close", "trend_up", "trend_down", "momentum", "trigger_up", "trigger_down"]
+    fields = ["Open", "High", "Low", "Close", "trend_up", "trend_down", "momentum", "atr",
+              "trigger_up", "trigger_down"]
     wide = {f: {} for f in fields}
     ticker_sector = {}
 
@@ -71,7 +104,8 @@ def _build_wide_frames(uni: pd.DataFrame):
         df = data.load_prices(t)
         if df is None or len(df) <= config.MOM_LOOKBACK:
             continue
-        ind = _indicator_frame(df).reindex(master_dates)
+        ind = _indicator_frame(df, confirm_days=confirm_days, require_volume=require_volume,
+                                min_slope_pct=min_slope_pct).reindex(master_dates)
         for f in fields:
             wide[f][t] = ind[f]
         ticker_sector[t] = uni.loc[uni["ticker"] == t, "sector_etf"].iloc[0]
@@ -100,10 +134,20 @@ def _build_wide_frames(uni: pd.DataFrame):
 
 
 def simulate(wide, ticker_sector, sector_rs, dates, stop_pct, target_pct,
-             include_short=True, max_concurrent=MAX_CONCURRENT):
+             include_short=True, max_concurrent=MAX_CONCURRENT,
+             stop_mode="pct", atr_stop_mult=2.0, atr_target_mult=3.0, trailing_stop=False):
     """Runs the walk-forward simulation with the given exit/direction parameters.
-    Reuses precomputed indicator frames so a parameter grid doesn't recompute them each time."""
+    Reuses precomputed indicator frames so a parameter grid doesn't recompute them each time.
+
+    stop_mode: "pct" (flat stop_pct/target_pct off entry price, old behavior) or "atr"
+    (stop/target sized as atr_stop_mult/atr_target_mult times the ticker's own ATR at entry,
+    fixed for the life of the trade -- so a volatile stock gets a wider stop than a calm one).
+    trailing_stop: if True, the stop ratchets in the position's favor as price makes new
+    highs/lows since entry (never loosens), using whichever stop_mode's sizing; the profit
+    target stays fixed either way.
+    """
     open_df, high_df, low_df, close_df = wide["Open"], wide["High"], wide["Low"], wide["Close"]
+    atr_df = wide["atr"]
     trend_up_df, trend_down_df = wide["trend_up"], wide["trend_down"]
     momentum_df = wide["momentum"]
     trigger_up_df, trigger_down_df = wide["trigger_up"], wide["trigger_down"]
@@ -129,12 +173,23 @@ def simulate(wide, ticker_sector, sector_rs, dates, stop_pct, target_pct,
             o = open_df.at[date, ticker] if ticker in open_df.columns else np.nan
             if pd.isna(o):
                 continue
-            if direction == "up":
-                stop, target = o * (1 - stop_pct), o * (1 + target_pct)
+            if stop_mode == "atr":
+                atr_val = atr_df.at[date, ticker] if ticker in atr_df.columns else np.nan
+                if pd.isna(atr_val) or atr_val <= 0:
+                    continue  # can't size a stop without a valid ATR, skip this entry
+                if direction == "up":
+                    stop, target = o - atr_stop_mult * atr_val, o + atr_target_mult * atr_val
+                else:
+                    stop, target = o + atr_stop_mult * atr_val, o - atr_target_mult * atr_val
             else:
-                stop, target = o * (1 + stop_pct), o * (1 - target_pct)
+                atr_val = np.nan
+                if direction == "up":
+                    stop, target = o * (1 - stop_pct), o * (1 + target_pct)
+                else:
+                    stop, target = o * (1 + stop_pct), o * (1 - target_pct)
             positions[ticker] = {"direction": direction, "entry_date": date, "entry_price": o,
-                                 "stop": stop, "target": target, "prev_price": o}
+                                 "stop": stop, "target": target, "prev_price": o, "atr": atr_val,
+                                 "extreme": o}
         pending = still_pending  # anything skipped (capacity/no data) is dropped, not retried
 
         # 2. Check stop/target on all open positions using today's H/L; else mark-to-close
@@ -180,6 +235,19 @@ def simulate(wide, ticker_sector, sector_rs, dates, stop_pct, target_pct,
                     ret = -ret
                 slot_returns.append(ret)
                 pos["prev_price"] = c
+
+                if trailing_stop:
+                    # Ratchet the stop in the position's favor using today's new extreme; never loosens.
+                    if pos["direction"] == "up":
+                        pos["extreme"] = max(pos["extreme"], h)
+                        new_stop = (pos["extreme"] - atr_stop_mult * pos["atr"] if stop_mode == "atr"
+                                    else pos["extreme"] * (1 - stop_pct))
+                        pos["stop"] = max(pos["stop"], new_stop)
+                    else:
+                        pos["extreme"] = min(pos["extreme"], l)
+                        new_stop = (pos["extreme"] + atr_stop_mult * pos["atr"] if stop_mode == "atr"
+                                    else pos["extreme"] * (1 + stop_pct))
+                        pos["stop"] = min(pos["stop"], new_stop)
 
         # Pad/trim to MAX_CONCURRENT slots (idle slots = 0% that day = cash)
         while len(slot_returns) < max_concurrent:
@@ -234,10 +302,12 @@ def simulate(wide, ticker_sector, sector_rs, dates, stop_pct, target_pct,
 def run_backtest():
     """Convenience wrapper: builds frames fresh and runs with config.py's default params."""
     uni = universe.build_universe()
-    wide, ticker_sector, sector_rs, dates = _build_wide_frames(uni)
+    wide, ticker_sector, sector_rs, dates = _build_wide_frames(
+        uni, require_volume=config.REQUIRE_VOLUME_CONFIRM
+    )
     return simulate(wide, ticker_sector, sector_rs, dates,
                      stop_pct=config.STOP_LOSS_PCT, target_pct=config.PROFIT_TARGET_PCT,
-                     include_short=True)
+                     include_short=config.INCLUDE_SHORT)
 
 
 def _buy_hold_equity(ticker: str, start_date, dates) -> pd.Series:
