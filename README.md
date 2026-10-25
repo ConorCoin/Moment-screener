@@ -51,6 +51,25 @@ available by ~6pm ET):
 
 Not set up yet in this build — ask if you want this wired up automatically.
 
+## Recommended: qualitative review before acting on a trigger
+
+This screener is 100% price/volume-based — it has no idea what a company actually does,
+whether its earnings are improving or deteriorating, or what's happening in markets that day.
+A name can trigger on pure price action while the underlying fundamentals are quietly rotting
+(e.g. a short squeeze or hype-driven move with no earnings support).
+
+Before acting on any `LONG triggers` / `SHORT triggers` line in a report, it's worth handing
+that day's `reports/<date>.md` to an LLM agent (Claude, or your local model) with a prompt like:
+
+> "Here's today's momentum screener output. For each triggered ticker, pull current market
+> conditions, recent news/catalysts, and a quick fundamental sanity check (earnings trend,
+> debt, any red flags). Flag anything where the technical signal looks disconnected from the
+> fundamentals or the broader market backdrop."
+
+This isn't built into the pipeline (deliberately — the screening logic itself should stay
+deterministic and backtestable, not dependent on an LLM's non-reproducible judgment). Treat it
+as a manual second opinion step between "the report triggered something" and "I place the trade."
+
 ## What this is and isn't
 
 - This is a **signal generator**, not an autotrader. You review `reports/<date>.md` and

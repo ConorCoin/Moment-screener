@@ -39,3 +39,10 @@ python sector.py      # just print sector rankings
 ```
 
 See `README.md` in this same folder for how the screening logic actually works.
+
+## Before acting on a trigger
+
+This screener is pure price/volume — no fundamentals, no news. Before trading anything in
+the "triggers" section of a report, hand that `reports/<date>.md` file to an LLM agent and
+ask it to check current market conditions, news/catalysts, and basic fundamentals on each
+triggered ticker. See the "Recommended: qualitative review" section in `README.md`.
